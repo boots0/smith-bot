@@ -1,6 +1,6 @@
 # discord_bot.py
 # This bot acts as a bridge between Discord and an n8n.io workflow.
-# Updated to handle static commands locally for efficiency.
+# Final production-ready version.
 
 import discord
 import os
@@ -17,8 +17,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
-PORT = os.getenv("PORT", os.getenv("BOT_WEBHOOK_PORT", 8080))
-
 
 # --- 2. Basic Bot Sanity Checks ---
 if not DISCORD_BOT_TOKEN:
@@ -34,6 +32,7 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 # --- 4. Flask Web Server Setup ---
+# Gunicorn will run this 'app' object.
 app = Flask(__name__)
 
 @app.route('/webhook', methods=['POST'])
@@ -64,7 +63,7 @@ async def send_message_to_channel(channel_id: int, message: str):
 @client.event
 async def on_ready():
     logging.info(f'Bot is logged in as {client.user}')
-    logging.info(f'Ready to receive commands on port {PORT}!')
+    logging.info('Ready to receive commands!')
 
 @client.event
 async def on_message(message):
@@ -72,28 +71,23 @@ async def on_message(message):
         return
 
     if message.content.startswith('!Smith '):
-        query = message.content[len('!Smith '):].strip().lower() # Convert to lowercase for easy matching
+        # Note: we get the original casing of the query now for the AI
+        query_full_case = message.content[len('!Smith '):].strip()
+        query_lower = query_full_case.lower()
         channel_id = message.channel.id
         
-        # --- NEW: STATIC COMMAND HANDLER ---
-        # Check for non-AI, hardcoded commands first.
-        if query == "who is that guy?":
+        # --- STATIC COMMAND HANDLER ---
+        if query_lower == "who is that guy?":
             logging.info(f"STATIC COMMAND MATCH: 'who is that guy?' in channel {channel_id}")
-            # --- FIX: Replace with your full emoji ID string ---
-            await message.channel.send("<:thisguy:1389678025607479396>") # Example ID
-            return # Stop processing, do not call n8n
-            
-        # You can add more 'elif' blocks here for other static commands
-        # elif query == "another command":
-        #     await message.channel.send("Another static response")
-        #     return
+            await message.channel.send("<:thisguy:1389678025607479396>") # User's correct emoji ID
+            return
 
-        # --- If it's not a static command, proceed with the AI workflow ---
-        logging.info(f"AI COMMAND RECEIVED in channel {channel_id}: '{query}'")
-        await message.channel.send(f"Got it. Analyzing your request: `{query}`. Please wait...")
+        # --- AI WORKFLOW ---
+        logging.info(f"AI COMMAND RECEIVED in channel {channel_id}: '{query_full_case}'")
+        await message.channel.send(f"Got it. Analyzing your request: `{query_full_case}`. Please wait...")
 
         payload = {
-            "query": query,
+            "query": query_full_case, # Send original query casing
             "channel_id": str(channel_id),
             "user": message.author.name
         }
@@ -109,13 +103,12 @@ async def on_message(message):
             logging.error(f"CRITICAL: Error sending data to n8n: {e}", exc_info=True)
             await message.channel.send("Sorry, there was a critical error communicating with my analysis service. Please check the logs.")
 
-# --- 6. The Bridge: Running Flask and Discord Bot Together ---
-def run_flask_app():
-    # Note: We will use Gunicorn to run this in production, not this function directly.
-    app.run(host='0.0.0.0', port=int(PORT))
-
-if __name__ == '__main__':
-    flask_thread = threading.Thread(target=run_flask_app)
-    flask_thread.daemon = True
-    flask_thread.start()
+# --- 6. Start the Discord bot client ---
+# The Flask app is started by Gunicorn (from the Procfile), not here.
+# This part of the script just needs to start the Discord bot.
+def run_bot():
     client.run(DISCORD_BOT_TOKEN)
+
+# Start the bot in a separate thread
+bot_thread = threading.Thread(target=run_bot)
+bot_thread.start()
