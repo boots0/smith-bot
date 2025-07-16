@@ -1,12 +1,12 @@
 # discord_bot.py
 # This bot acts as a bridge between Discord and an n8n.io workflow.
-# Final production-ready version.
+# Final production-ready version with improved async handling.
 
 import discord
 import os
 import requests
-import threading
 import logging
+import asyncio
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 
@@ -17,6 +17,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
+# Gunicorn will use the PORT variable from the environment. Default to 8080 for local.
+PORT = os.getenv("PORT", "8080")
 
 # --- 2. Basic Bot Sanity Checks ---
 if not DISCORD_BOT_TOKEN:
@@ -42,7 +44,8 @@ def receive_n8n_response():
         channel_id = int(data['channel_id'])
         message_content = data['message']
         logging.info(f"Received response from n8n for channel {channel_id}")
-        client.loop.create_task(send_message_to_channel(channel_id, message_content))
+        # Use asyncio.run_coroutine_threadsafe for thread-safe async calls
+        asyncio.run_coroutine_threadsafe(send_message_to_channel(channel_id, message_content), client.loop)
         return jsonify({"status": "success"}), 200
     except Exception as e:
         logging.error(f"Error in /webhook endpoint: {e}", exc_info=True)
@@ -71,31 +74,31 @@ async def on_message(message):
         return
 
     if message.content.startswith('!Smith '):
-        # Note: we get the original casing of the query now for the AI
         query_full_case = message.content[len('!Smith '):].strip()
         query_lower = query_full_case.lower()
         channel_id = message.channel.id
         
-        # --- STATIC COMMAND HANDLER ---
         if query_lower == "who is that guy?":
             logging.info(f"STATIC COMMAND MATCH: 'who is that guy?' in channel {channel_id}")
-            await message.channel.send("<:thisguy:1389678025607479396>") # User's correct emoji ID
+            await message.channel.send("<:thisguy:1389678025607479396>")
             return
 
-        # --- AI WORKFLOW ---
         logging.info(f"AI COMMAND RECEIVED in channel {channel_id}: '{query_full_case}'")
         await message.channel.send(f"Got it. Analyzing your request: `{query_full_case}`. Please wait...")
 
         payload = {
-            "query": query_full_case, # Send original query casing
+            "query": query_full_case,
             "channel_id": str(channel_id),
             "user": message.author.name
         }
         
-        logging.info(f"Preparing to send POST request to: {N8N_WEBHOOK_URL}")
-        logging.info(f"Payload: {payload}")
         try:
-            response = requests.post(N8N_WEBHOOK_URL, json=payload, timeout=15)
+            # Run the blocking requests.post call in a separate thread managed by asyncio
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None, 
+                lambda: requests.post(N8N_WEBHOOK_URL, json=payload, timeout=15)
+            )
             logging.info(f"Received response from n8n. Status Code: {response.status_code}")
             response.raise_for_status()
             logging.info("Successfully sent data to n8n.")
@@ -103,12 +106,22 @@ async def on_message(message):
             logging.error(f"CRITICAL: Error sending data to n8n: {e}", exc_info=True)
             await message.channel.send("Sorry, there was a critical error communicating with my analysis service. Please check the logs.")
 
-# --- 6. Start the Discord bot client ---
-# The Flask app is started by Gunicorn (from the Procfile), not here.
-# This part of the script just needs to start the Discord bot.
-def run_bot():
-    client.run(DISCORD_BOT_TOKEN)
+# --- 6. Main startup logic ---
+async def main():
+    # The Flask app is started by Gunicorn, which will run the 'app' object.
+    # This script's main purpose is to start the Discord bot client.
+    await client.start(DISCORD_BOT_TOKEN)
 
-# Start the bot in a separate thread
-bot_thread = threading.Thread(target=run_bot)
-bot_thread.start()
+if __name__ == "__main__":
+    # This block is for local testing only. It will not run on Railway.
+    # It starts the bot and the Flask server for development.
+    def run_flask():
+        app.run(host="0.0.0.0", port=int(PORT))
+
+    # Import threading only for local testing
+    import threading
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
+    asyncio.run(main())
