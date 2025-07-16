@@ -1,6 +1,6 @@
 # discord_bot.py
 # This bot acts as a bridge between Discord and an n8n.io workflow.
-# Updated for robust hosting and enhanced logging.
+# Updated to handle static commands locally for efficiency.
 
 import discord
 import os
@@ -72,10 +72,23 @@ async def on_message(message):
         return
 
     if message.content.startswith('!Smith '):
-        query = message.content[len('!Smith '):].strip()
+        query = message.content[len('!Smith '):].strip().lower() # Convert to lowercase for easy matching
         channel_id = message.channel.id
-        logging.info(f"COMMAND RECEIVED in channel {channel_id}: '{query}'")
         
+        # --- NEW: STATIC COMMAND HANDLER ---
+        # Check for non-AI, hardcoded commands first.
+        if query == "who is that guy?":
+            logging.info(f"STATIC COMMAND MATCH: 'who is that guy?' in channel {channel_id}")
+            await message.channel.send(":thisguy:")
+            return # Stop processing, do not call n8n
+            
+        # You can add more 'elif' blocks here for other static commands
+        # elif query == "another command":
+        #     await message.channel.send("Another static response")
+        #     return
+
+        # --- If it's not a static command, proceed with the AI workflow ---
+        logging.info(f"AI COMMAND RECEIVED in channel {channel_id}: '{query}'")
         await message.channel.send(f"Got it. Analyzing your request: `{query}`. Please wait...")
 
         payload = {
@@ -83,17 +96,15 @@ async def on_message(message):
             "channel_id": str(channel_id),
             "user": message.author.name
         }
-
-        # --- DETAILED LOGGING FOR N8N REQUEST ---
+        
         logging.info(f"Preparing to send POST request to: {N8N_WEBHOOK_URL}")
         logging.info(f"Payload: {payload}")
         try:
-            response = requests.post(N8N_WEBHOOK_URL, json=payload, timeout=15) # Increased timeout
+            response = requests.post(N8N_WEBHOOK_URL, json=payload, timeout=15)
             logging.info(f"Received response from n8n. Status Code: {response.status_code}")
             response.raise_for_status()
             logging.info("Successfully sent data to n8n.")
         except requests.exceptions.RequestException as e:
-            # This will now log the full error, including timeouts, connection errors, etc.
             logging.error(f"CRITICAL: Error sending data to n8n: {e}", exc_info=True)
             await message.channel.send("Sorry, there was a critical error communicating with my analysis service. Please check the logs.")
 
