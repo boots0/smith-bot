@@ -1,6 +1,4 @@
 # Procfile
-# This file tells Railway what command to run to start your application.
-# 'web' is a standard process type for web services.
-# It will execute the discord_bot.py script using Python.
-
-web: python discord_bot.py
+# This tells Railway to use the Gunicorn server to run the 'app' object
+# found inside your 'discord_bot.py' file.
+web: gunicorn discord_bot:app
