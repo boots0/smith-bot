@@ -79,7 +79,8 @@ async def on_message(message):
         # Check for non-AI, hardcoded commands first.
         if query == "who is that guy?":
             logging.info(f"STATIC COMMAND MATCH: 'who is that guy?' in channel {channel_id}")
-            await message.channel.send(":thisguy:")
+            # --- FIX: Replace with your full emoji ID string ---
+            await message.channel.send("<:thisguy:1389678025607479396>") # Example ID
             return # Stop processing, do not call n8n
             
         # You can add more 'elif' blocks here for other static commands
