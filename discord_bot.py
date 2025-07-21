@@ -1,6 +1,6 @@
 # discord_bot.py
 # This bot acts as a bridge between Discord and an n8n.io workflow.
-# Final production-ready version with improved async handling.
+# Final version with message splitting for long responses.
 
 import discord
 import os
@@ -17,7 +17,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
-# Gunicorn will use the PORT variable from the environment. Default to 8080 for local.
 PORT = os.getenv("PORT", "8080")
 
 # --- 2. Basic Bot Sanity Checks ---
@@ -34,7 +33,6 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 # --- 4. Flask Web Server Setup ---
-# Gunicorn will run this 'app' object.
 app = Flask(__name__)
 
 @app.route('/webhook', methods=['POST'])
@@ -44,21 +42,32 @@ def receive_n8n_response():
         channel_id = int(data['channel_id'])
         message_content = data['message']
         logging.info(f"Received response from n8n for channel {channel_id}")
-        # Use asyncio.run_coroutine_threadsafe for thread-safe async calls
         asyncio.run_coroutine_threadsafe(send_message_to_channel(channel_id, message_content), client.loop)
         return jsonify({"status": "success"}), 200
     except Exception as e:
         logging.error(f"Error in /webhook endpoint: {e}", exc_info=True)
         return jsonify({"status": "error", "details": str(e)}), 500
 
+# --- UPDATED FUNCTION WITH MESSAGE SPLITTING ---
 async def send_message_to_channel(channel_id: int, message: str):
     try:
         channel = await client.fetch_channel(channel_id)
-        if channel:
-            await channel.send(message)
-            logging.info(f"Successfully sent message to channel {channel_id}")
-        else:
+        if not channel:
             logging.error(f"Could not find channel with ID {channel_id}")
+            return
+
+        if len(message) <= 2000:
+            await channel.send(message)
+            logging.info(f"Successfully sent single message to channel {channel_id}")
+        else:
+            logging.info(f"Message is too long ({len(message)} chars). Splitting into multiple messages.")
+            # Split the message into chunks of 2000 characters
+            for i in range(0, len(message), 2000):
+                chunk = message[i:i+2000]
+                await channel.send(chunk)
+                logging.info(f"Sent chunk {i//2000 + 1} to channel {channel_id}")
+                await asyncio.sleep(1) # Small delay to prevent rate limiting
+
     except Exception as e:
         logging.error(f"Error sending message to channel {channel_id}: {e}", exc_info=True)
 
@@ -93,7 +102,6 @@ async def on_message(message):
         }
         
         try:
-            # Run the blocking requests.post call in a separate thread managed by asyncio
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None, 
@@ -108,17 +116,12 @@ async def on_message(message):
 
 # --- 6. Main startup logic ---
 async def main():
-    # The Flask app is started by Gunicorn, which will run the 'app' object.
-    # This script's main purpose is to start the Discord bot client.
     await client.start(DISCORD_BOT_TOKEN)
 
 if __name__ == "__main__":
-    # This block is for local testing only. It will not run on Railway.
-    # It starts the bot and the Flask server for development.
     def run_flask():
         app.run(host="0.0.0.0", port=int(PORT))
 
-    # Import threading only for local testing
     import threading
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
